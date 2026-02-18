@@ -1519,15 +1519,33 @@ def toggle_traffic_logging():
         log_event("INFO", f"toggle_traffic_logging: traffic_logging_enabled={new_status}")
         
         if new_status:
-            print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be enabled after reconfiguring RU bridge (Menu 2).")
+            print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be enabled after restarting Xray (Menu 11).")
             print(f"{Colors.YELLOW}[INFO]{Colors.END} View traffic logs via Menu 9.")
         else:
-            print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be disabled after reconfiguring RU bridge (Menu 2).")
+            print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be disabled after restarting Xray (Menu 11).")
         
         return True
     else:
         print("Toggle cancelled.")
         return True
+
+
+def restart_xray_service():
+    """Restart Xray/3x-ui service to apply configuration changes."""
+    if not is_3x_ui_present():
+        print(f"{Colors.RED}[ERROR]{Colors.END} 3X-UI is not installed or not running.")
+        return False
+    
+    print(f"{Colors.CYAN}[INFO]{Colors.END} Restarting Xray/3x-ui service to apply configuration changes...")
+    
+    if run(["x-ui", "restart"], "Restarting 3X-UI"):
+        print(f"{Colors.GREEN}[DONE]{Colors.END} Xray/3x-ui service restarted successfully.")
+        log_event("INFO", "restart_xray_service: service restarted")
+        return True
+    else:
+        print(f"{Colors.RED}[ERROR]{Colors.END} Failed to restart Xray/3x-ui service.")
+        log_event("ERROR", "restart_xray_service: restart failed")
+        return False
 
 
 def reset_cascade_state():
@@ -1653,9 +1671,10 @@ def main():
         print("8. View logs")
         print("9. View traffic routing log")
         print("10. Toggle traffic logging (enable/disable)")
-        print("11. Exit")
-        print("12. Change 3x-ui panel login/password")
-        print("13. Full reset (menu 1/2 changes)")
+        print("11. Restart Xray service (apply changes)")
+        print("12. Exit")
+        print("13. Change 3x-ui panel login/password")
+        print("14. Full reset (menu 1/2 changes)")
 
         choice = input("\nSelect: ").strip()
 
@@ -1680,12 +1699,14 @@ def main():
         elif choice == "10":
             execute_menu_action("Menu 10: Toggle traffic logging", toggle_traffic_logging)
         elif choice == "11":
+            execute_menu_action("Menu 11: Restart Xray service", restart_xray_service)
+        elif choice == "12":
             log_event("INFO", "script stopped by user")
             break
-        elif choice == "12":
-            execute_menu_action("Menu 12: Change 3x-ui panel credentials", update_panel_credentials)
         elif choice == "13":
-            execute_menu_action("Menu 13: Full reset of menu 1/2 state", reset_cascade_state)
+            execute_menu_action("Menu 13: Change 3x-ui panel credentials", update_panel_credentials)
+        elif choice == "14":
+            execute_menu_action("Menu 14: Full reset of menu 1/2 state", reset_cascade_state)
         else:
             print("Unknown menu option")
             log_event("WARN", f"unknown menu choice: {choice}")
