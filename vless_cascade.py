@@ -487,15 +487,40 @@ def install_3x_ui():
         f.write(script_text)
     os.chmod(script_path, 0o700)
 
-    print(f"{Colors.CYAN}[2/3]{Colors.END} Running installer (this can take a few minutes)...")
-    ok = run(["bash", script_path], "Installing 3X-UI", stream=True)
+    nginx_was_active = False
+    try:
+        nginx_was_active = subprocess.run(
+            ["systemctl", "is-active", "--quiet", "nginx"],
+            check=False,
+        ).returncode == 0
+    except Exception:
+        nginx_was_active = False
+
+    if nginx_was_active:
+        print(f"{Colors.CYAN}[2/4]{Colors.END} Stopping nginx temporarily for certificate setup...")
+        if not run(["systemctl", "stop", "nginx"], "Stopping nginx", stream=True):
+            log_event("ERROR", "install_3x_ui: failed to stop nginx")
+            try:
+                os.remove(script_path)
+            except OSError:
+                pass
+            return False
+
+    print(f"{Colors.CYAN}[3/4]{Colors.END} Running installer (this can take a few minutes)...")
+    try:
+        ok = run(["bash", script_path], "Installing 3X-UI", stream=True)
+    finally:
+        if nginx_was_active:
+            print(f"{Colors.CYAN}[4/4]{Colors.END} Starting nginx back...")
+            if not run(["systemctl", "start", "nginx"], "Starting nginx", stream=True):
+                log_event("ERROR", "install_3x_ui: failed to start nginx after install")
 
     try:
         os.remove(script_path)
     except OSError:
         pass
 
-    print(f"{Colors.CYAN}[3/3]{Colors.END} Verifying 3X-UI availability...")
+    print(f"{Colors.CYAN}[done]{Colors.END} Verifying 3X-UI availability...")
     log_event("INFO", f"install_3x_ui: finished with status={ok}")
     return ok
 
