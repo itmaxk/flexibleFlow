@@ -1625,6 +1625,49 @@ def restart_xray_service():
         return False
 
 
+def analyze_routing():
+    """Analyze current routing configuration and test how domains are routed."""
+    routes = load_routes()
+    
+    print(f"\n{Colors.CYAN}=== Current Routing Configuration ==={Colors.END}")
+    print(f"\n{Colors.GREEN}Direct (no proxy):{Colors.END}")
+    print(f"  Domains ({len(routes.get('direct_domains', []))}):")
+    for domain in routes.get("direct_domains", []):
+        print(f"    - {domain}")
+    print(f"  IPs ({len(routes.get('direct_ips', []))}):")
+    for ip in routes.get("direct_ips", []):
+        print(f"    - {ip}")
+    
+    print(f"\n{Colors.YELLOW}Proxy (through Foreign server):{Colors.END}")
+    print(f"  Domains ({len(routes.get('proxy_domains', []))}):")
+    for domain in routes.get("proxy_domains", []):
+        print(f"    - {domain}")
+    print(f"  IPs ({len(routes.get('proxy_ips', []))}):")
+    for ip in routes.get("proxy_ips", []):
+        print(f"    - {ip}")
+    
+    print(f"\n{Colors.CYAN}=== Routing Logic ==={Colors.END}")
+    print("1. Direct rules are checked first")
+    print("2. If domain/IP matches a direct rule → routed directly (green)")
+    print("3. If domain/IP matches a proxy rule → routed through proxy (yellow)")
+    print("4. If no rules match → routed through proxy (fallback)")
+    
+    print(f"\n{Colors.CYAN}=== Common Issues ==={Colors.END}")
+    print(f"{Colors.YELLOW}Issue:{Colors.END} Foreign sites going directly instead of through proxy")
+    print(f"{Colors.CYAN}Possible causes:{Colors.END}")
+    print("  1. Domain is in direct_domains list")
+    print("  2. Domain matches a regex pattern in direct_domains")
+    print("  3. Domain's IP is in direct_ips list (geoip:ru, geoip:private)")
+    print("  4. Fallback rule is routing to proxy instead of direct")
+    print(f"\n{Colors.CYAN}Solution:{Colors.END}")
+    print("  1. Remove domain from direct_domains if it should go through proxy")
+    print("  2. Add domain to proxy_domains if it should go through proxy")
+    print("  3. Check traffic log (Menu 9) to see actual routing")
+    
+    log_event("INFO", f"analyze_routing: displayed current routing configuration")
+    return True
+
+
 def reset_cascade_state():
     print(f"{Colors.YELLOW}[WARN]{Colors.END} FULL RESET will remove all configuration and installed components from this script.")
     print("- remove inbounds and xrayConfig changes from x-ui DB (if present)")
@@ -1748,10 +1791,11 @@ def main():
         print("8. View logs")
         print("9. View traffic routing log")
         print("10. Toggle traffic logging (enable/disable)")
-        print("11. Restart Xray service (apply changes)")
-        print("12. Exit")
-        print("13. Change 3x-ui panel login/password")
-        print("14. Full reset (menu 1/2 changes)")
+        print("11. Analyze routing configuration")
+        print("12. Restart Xray service (apply changes)")
+        print("13. Exit")
+        print("14. Change 3x-ui panel login/password")
+        print("15. Full reset (menu 1/2 changes)")
 
         choice = input("\nSelect: ").strip()
 
@@ -1776,14 +1820,16 @@ def main():
         elif choice == "10":
             execute_menu_action("Menu 10: Toggle traffic logging", toggle_traffic_logging)
         elif choice == "11":
-            execute_menu_action("Menu 11: Restart Xray service", restart_xray_service)
+            execute_menu_action("Menu 11: Analyze routing configuration", analyze_routing)
         elif choice == "12":
+            execute_menu_action("Menu 12: Restart Xray service", restart_xray_service)
+        elif choice == "13":
             log_event("INFO", "script stopped by user")
             break
-        elif choice == "13":
-            execute_menu_action("Menu 13: Change 3x-ui panel credentials", update_panel_credentials)
         elif choice == "14":
-            execute_menu_action("Menu 14: Full reset of menu 1/2 state", reset_cascade_state)
+            execute_menu_action("Menu 14: Change 3x-ui panel credentials", update_panel_credentials)
+        elif choice == "15":
+            execute_menu_action("Menu 15: Full reset of menu 1/2 state", reset_cascade_state)
         else:
             print("Unknown menu option")
             log_event("WARN", f"unknown menu choice: {choice}")
