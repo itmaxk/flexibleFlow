@@ -50,6 +50,7 @@ CONFIG_STORE = "/root/.vpn_manager_settings.json"
 ROUTES_STORE = "/etc/vless-cascade/routes.json"
 BACKUP_DIR = "/etc/vless-cascade/backups"
 LOG_PATH = "/var/log/vless-cascade.log"
+TRAFFIC_LOG_PATH = "/var/log/vless-cascade-traffic.log"
 XRAY_BIN = "/usr/local/x-ui/bin/xray"
 XUI_INSTALL_URL = "https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh"
 
@@ -641,6 +642,7 @@ def apply_route_profile():
     save_json(ROUTES_STORE, profile["routes"])
     print(f"{Colors.GREEN}Applied profile:{Colors.END} {profile['name']}")
     log_event("INFO", f"apply_route_profile: {profile['name']}")
+    log_routing_config(profile["routes"])
     return True
 
 def load_settings():
@@ -652,6 +654,7 @@ def load_settings():
         "actual_port": None,
         "panel_username": "",
         "panel_password": "",
+        "traffic_logging_enabled": False,
     }
     return load_json(CONFIG_STORE, defaults)
 
@@ -713,7 +716,7 @@ def parse_foreign_link(link):
         "sid": sid,
     }
 
-def build_routing(foreign, routes):
+def build_routing(foreign, routes, traffic_logging_enabled=False):
     rules = []
 
     if routes["direct_domains"]:
@@ -737,7 +740,7 @@ def build_routing(foreign, routes):
     else:
         rules.append({"type": "field", "outboundTag": "proxy", "network": "tcp,udp"})
 
-    return {
+    config = {
         "routing": {
             "domainStrategy": "IPIfNonMatch",
             "rules": rules,
@@ -774,6 +777,32 @@ def build_routing(foreign, routes):
             {"protocol": "freedom", "tag": "direct"},
         ],
     }
+
+    # Only add log configuration if traffic logging is enabled
+    if traffic_logging_enabled:
+        config["log"] = {
+            "access": TRAFFIC_LOG_PATH,
+            "error": "/var/log/xray-error.log",
+            "loglevel": "warning"
+        }
+
+    return config
+
+
+def log_routing_config(routes, foreign=None):
+    """Log the current routing configuration for diagnostic purposes."""
+    try:
+        log_event("INFO", "=== Routing Configuration ===")
+        log_event("INFO", f"Direct domains ({len(routes.get('direct_domains', []))}): {', '.join(routes.get('direct_domains', []))}")
+        log_event("INFO", f"Direct IPs ({len(routes.get('direct_ips', []))}): {', '.join(routes.get('direct_ips', []))}")
+        log_event("INFO", f"Proxy domains ({len(routes.get('proxy_domains', []))}): {', '.join(routes.get('proxy_domains', []))}")
+        log_event("INFO", f"Proxy IPs ({len(routes.get('proxy_ips', []))}): {', '.join(routes.get('proxy_ips', []))}")
+        if foreign:
+            log_event("INFO", f"Foreign proxy: {foreign['address']}:{foreign['port']}")
+        log_event("INFO", f"Traffic log path: {TRAFFIC_LOG_PATH}")
+        log_event("INFO", "=== End Routing Configuration ===")
+    except Exception as e:
+        log_event("ERROR", f"log_routing_config: failed to log config: {e}")
 
 
 def is_3x_ui_present():
@@ -1212,7 +1241,8 @@ def setup_ru():
     try:
         foreign = parse_foreign_link(foreign_link)
         routes = load_routes()
-        xray_config = build_routing(foreign, routes)
+        traffic_logging_enabled = settings.get("traffic_logging_enabled", False)
+        xray_config = build_routing(foreign, routes, traffic_logging_enabled)
         if not validate_xray_config_with_xray(xray_config):
             return False
 
@@ -1243,7 +1273,8 @@ def setup_ru():
         print_qr(link)
         print(f"{Colors.YELLOW}Client link:{Colors.END} {link}")
         print_3x_ui_panel_info()
-        log_event("INFO", "setup_ru: completed")
+        log_routing_config(routes, foreign)
+        log_event("INFO", f"setup_ru: completed, traffic_logging={traffic_logging_enabled}")
         return True
     except Exception as e:
         print(f"{Colors.RED}[ERROR]{Colors.END} {e}")
@@ -1276,9 +1307,10 @@ def edit_routes_file():
         return False
 
     try:
-        load_routes()
+        new_routes = load_routes()
         print(f"{Colors.GREEN}Routes saved and validated.{Colors.END}")
         log_event("INFO", "edit_routes_file: updated")
+        log_routing_config(new_routes)
         return True
     except Exception as e:
         print(f"{Colors.RED}[ERROR]{Colors.END} Invalid routes JSON: {e}")
@@ -1388,6 +1420,116 @@ def view_log_file():
         return False
 
 
+def view_traffic_log():
+    """View and analyze Xray traffic access log to understand routing decisions."""
+    settings = load_settings()
+    if not settings.get("traffic_logging_enabled", False):
+        print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging is currently DISABLED.")
+        print(f"{Colors.YELLOW}[INFO]{Colors.END} Enable it via menu 13 to start logging traffic.")
+        return True
+
+    if not os.path.exists(TRAFFIC_LOG_PATH):
+        print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic log file not found: {TRAFFIC_LOG_PATH}")
+        print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be enabled after next Xray restart.")
+        return True
+
+    tail_raw = input("How many last traffic log lines to show? [100]: ").strip()
+    try:
+        tail_n = int(tail_raw) if tail_raw else 100
+        if tail_n < 1:
+            raise ValueError
+    except ValueError:
+        print(f"{Colors.RED}[ERROR]{Colors.END} Invalid line count")
+        return False
+
+    try:
+        with open(TRAFFIC_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+        
+        if not lines:
+            print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic log is empty. No traffic recorded yet.")
+            return True
+
+        print(f"\n{Colors.CYAN}=== Last {min(tail_n, len(lines))} lines from {TRAFFIC_LOG_PATH} ==={Colors.END}")
+        print(f"{Colors.CYAN}Format: timestamp [protocol] source:port -> destination:port -> outbound_tag{Colors.END}")
+        print(f"{Colors.GREEN}direct{Colors.END} = routed directly (no proxy)")
+        print(f"{Colors.YELLOW}proxy{Colors.END} = routed through foreign proxy")
+        print("-" * 80)
+        
+        # Parse and display traffic logs
+        direct_count = 0
+        proxy_count = 0
+        for line in lines[-tail_n:]:
+            line_stripped = line.rstrip("\n")
+            # Colorize based on outbound tag
+            if ">>>" in line_stripped:
+                if "direct" in line_stripped.lower():
+                    direct_count += 1
+                    # Highlight direct routes in green
+                    parts = line_stripped.split(">>>")
+                    if len(parts) == 2:
+                        print(f"{parts[0]}>>>{Colors.GREEN}{parts[1]}{Colors.END}")
+                    else:
+                        print(line_stripped)
+                elif "proxy" in line_stripped.lower() or "vless" in line_stripped.lower():
+                    proxy_count += 1
+                    # Highlight proxy routes in yellow
+                    parts = line_stripped.split(">>>")
+                    if len(parts) == 2:
+                        print(f"{parts[0]}>>>{Colors.YELLOW}{parts[1]}{Colors.END}")
+                    else:
+                        print(line_stripped)
+                else:
+                    print(line_stripped)
+            else:
+                print(line_stripped)
+        
+        # Show summary
+        total_shown = min(tail_n, len(lines))
+        print("-" * 80)
+        print(f"{Colors.CYAN}Summary (last {total_shown} entries):{Colors.END}")
+        print(f"  {Colors.GREEN}Direct routes:{Colors.END} {direct_count}")
+        print(f"  {Colors.YELLOW}Proxy routes:{Colors.END} {proxy_count}")
+        print(f"  Total: {direct_count + proxy_count}")
+        
+        return True
+    except Exception as e:
+        print(f"{Colors.RED}[ERROR]{Colors.END} Failed to read traffic log: {e}")
+        log_event("ERROR", f"view_traffic_log: read failed: {e}")
+        return False
+
+
+def toggle_traffic_logging():
+    """Enable or disable traffic logging."""
+    settings = load_settings()
+    current_status = settings.get("traffic_logging_enabled", False)
+    
+    print(f"\nCurrent traffic logging status: {Colors.GREEN if current_status else Colors.RED}{ 'ENABLED' if current_status else 'DISABLED' }{Colors.END}")
+    print(f"{Colors.YELLOW}[WARN]{Colors.END} Traffic logs can grow large and consume disk space.")
+    print(f"{Colors.YELLOW}[INFO]{Colors.END} Enable logging only when diagnosing routing issues.")
+    
+    choice = input(f"\nToggle traffic logging? [Y/n]: ").strip().lower()
+    if choice in ("", "y", "yes", "д", "да"):
+        new_status = not current_status
+        settings["traffic_logging_enabled"] = new_status
+        save_settings(settings)
+        
+        status_text = f"{Colors.GREEN}ENABLED{Colors.END}" if new_status else f"{Colors.RED}DISABLED{Colors.END}"
+        print(f"{Colors.GREEN}[INFO]{Colors.END} Traffic logging is now {status_text}")
+        log_event("INFO", f"toggle_traffic_logging: traffic_logging_enabled={new_status}")
+        
+        if new_status:
+            print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be enabled after reconfiguring RU bridge (Menu 2).")
+            print(f"{Colors.YELLOW}[INFO]{Colors.END} View traffic logs via Menu 9.")
+        else:
+            print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be disabled after reconfiguring RU bridge (Menu 2).")
+        
+        return True
+    else:
+        print("Toggle cancelled.")
+        return True
+
+
 def reset_cascade_state():
     print(f"{Colors.YELLOW}[WARN]{Colors.END} FULL RESET will remove all configuration and installed components from this script.")
     print("- remove inbounds and xrayConfig changes from x-ui DB (if present)")
@@ -1451,6 +1593,8 @@ def reset_cascade_state():
         CONFIG_STORE,
         DB_PATH,
         LOG_PATH,
+        TRAFFIC_LOG_PATH,
+        "/var/log/xray-error.log",
         "/usr/bin/x-ui",
         "/usr/local/bin/x-ui",
         "/etc/systemd/system/x-ui.service",
@@ -1490,6 +1634,10 @@ def main():
             print(f"Current active port: {Colors.GREEN}{settings['actual_port']}{Colors.END}")
         print(f"Routes file: {ROUTES_STORE}")
         print(f"Logs: {LOG_PATH}")
+        traffic_logging_status = settings.get("traffic_logging_enabled", False)
+        status_color = Colors.GREEN if traffic_logging_status else Colors.RED
+        status_text = "ENABLED" if traffic_logging_status else "DISABLED"
+        print(f"Traffic logging: {status_color}{status_text}{Colors.END} ({TRAFFIC_LOG_PATH})")
         if SAFE_MODE:
             print(f"{Colors.YELLOW}[SAFE MODE]{Colors.END} Auto-install of dependencies is disabled")
             if qrcode is None:
@@ -1503,9 +1651,11 @@ def main():
         print("6. Apply route profile")
         print("7. Rollback xrayConfig from backup")
         print("8. View logs")
-        print("9. Exit")
-        print("10. Change 3x-ui panel login/password")
-        print("11. Full reset (menu 1/2 changes)")
+        print("9. View traffic routing log")
+        print("10. Toggle traffic logging (enable/disable)")
+        print("11. Exit")
+        print("12. Change 3x-ui panel login/password")
+        print("13. Full reset (menu 1/2 changes)")
 
         choice = input("\nSelect: ").strip()
 
@@ -1526,12 +1676,16 @@ def main():
         elif choice == "8":
             execute_menu_action("Menu 8: View logs", view_log_file)
         elif choice == "9":
+            execute_menu_action("Menu 9: View traffic routing log", view_traffic_log)
+        elif choice == "10":
+            execute_menu_action("Menu 10: Toggle traffic logging", toggle_traffic_logging)
+        elif choice == "11":
             log_event("INFO", "script stopped by user")
             break
-        elif choice == "10":
-            execute_menu_action("Menu 10: Change 3x-ui panel credentials", update_panel_credentials)
-        elif choice == "11":
-            execute_menu_action("Menu 11: Full reset of menu 1/2 state", reset_cascade_state)
+        elif choice == "12":
+            execute_menu_action("Menu 12: Change 3x-ui panel credentials", update_panel_credentials)
+        elif choice == "13":
+            execute_menu_action("Menu 13: Full reset of menu 1/2 state", reset_cascade_state)
         else:
             print("Unknown menu option")
             log_event("WARN", f"unknown menu choice: {choice}")
