@@ -1566,9 +1566,11 @@ def restart_xray_service():
                             "error": "/var/log/xray-error.log",
                             "loglevel": "warning"
                         }
+                        log_event("INFO", f"restart_xray_service: added log config with path={TRAFFIC_LOG_PATH}")
                     elif "log" in xray_config:
                         # Remove log configuration if traffic logging is disabled
                         del xray_config["log"]
+                        log_event("INFO", "restart_xray_service: removed log config from xrayConfig")
                     
                     # Save updated config
                     conn.execute(
@@ -1578,11 +1580,14 @@ def restart_xray_service():
                     conn.commit()
                     log_event("INFO", f"restart_xray_service: updated xrayConfig with traffic_logging={traffic_logging_enabled}")
                     print(f"{Colors.CYAN}[INFO]{Colors.END} Updated Xray configuration (traffic logging: {Colors.GREEN if traffic_logging_enabled else Colors.RED}{'enabled' if traffic_logging_enabled else 'disabled'}{Colors.END})")
+                    if traffic_logging_enabled:
+                        print(f"{Colors.CYAN}[INFO]{Colors.END} Traffic will be logged to: {TRAFFIC_LOG_PATH}")
                 except json.JSONDecodeError as e:
                     log_event("ERROR", f"restart_xray_service: failed to parse xrayConfig: {e}")
                     print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not update Xray configuration, will just restart service.")
             else:
                 print(f"{Colors.YELLOW}[INFO]{Colors.END} No xrayConfig found in database, will just restart service.")
+                log_event("INFO", "restart_xray_service: no xrayConfig found in database")
     except Exception as e:
         log_event("ERROR", f"restart_xray_service: failed to update xrayConfig: {e}")
         print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not update Xray configuration, will just restart service.")
@@ -1592,6 +1597,8 @@ def restart_xray_service():
     if run(["x-ui", "restart"], "Restarting 3X-UI"):
         print(f"{Colors.GREEN}[DONE]{Colors.END} Xray/3x-ui service restarted successfully.")
         log_event("INFO", "restart_xray_service: service restarted")
+        if traffic_logging_enabled:
+            print(f"{Colors.YELLOW}[INFO]{Colors.END} Generate some VPN traffic and check log file: {TRAFFIC_LOG_PATH}")
         return True
     else:
         print(f"{Colors.RED}[ERROR]{Colors.END} Failed to restart Xray/3x-ui service.")
