@@ -7,6 +7,7 @@ import shlex
 import shutil
 import socket
 import sqlite3
+import string
 import subprocess
 import sys
 import tempfile
@@ -15,6 +16,7 @@ import traceback
 import urllib.parse
 import urllib.request
 import uuid
+import secrets
 from datetime import UTC, datetime
 
 # --- Runtime mode ---
@@ -277,6 +279,10 @@ def get_3x_ui_panel_url(server_ip=None):
 
 
 def get_3x_ui_panel_credentials():
+    cached = load_json(CONFIG_STORE, {})
+    if isinstance(cached, dict) and cached.get("panel_username") and cached.get("panel_password"):
+        return cached["panel_username"], cached["panel_password"]
+
     username = "admin"
     password = "admin"
     password_is_hashed = False
@@ -325,6 +331,63 @@ def get_3x_ui_panel_credentials():
         # Keep a practical fallback for fresh installs where password remains default.
         return username, f"{password} (DB stores hash)"
     return username, password
+
+
+def generate_panel_credentials():
+    username = f"admin{secrets.randbelow(9000) + 1000}"
+    alphabet = string.ascii_letters + string.digits + "-_"
+    password = "".join(secrets.choice(alphabet) for _ in range(16))
+    return username, password
+
+
+def apply_3x_ui_panel_credentials(username, password):
+    xui_cmd = shutil.which("x-ui")
+    if xui_cmd:
+        proc = subprocess.run(
+            [xui_cmd, "setting", "-username", username, "-password", password],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode == 0:
+            return True
+        log_event("WARN", f"apply_3x_ui_panel_credentials: x-ui setting failed: {(proc.stderr or proc.stdout or '').strip()}")
+
+    # Fallback for DB-based installations where CLI setting is unavailable.
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            changed = 0
+            for table in ("users", "user", "admin", "admins"):
+                if table not in tables:
+                    continue
+                columns = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+                if "username" in columns:
+                    conn.execute(f"UPDATE {table} SET username = ?", (username,))
+                    changed += 1
+                if "password" in columns:
+                    conn.execute(f"UPDATE {table} SET password = ?", (password,))
+                    changed += 1
+            conn.execute("UPDATE settings SET value = ? WHERE key IN ('webUser','webUsername','username')", (username,))
+            conn.execute("UPDATE settings SET value = ? WHERE key IN ('webPass','webPassword','password')", (password,))
+            conn.commit()
+            return changed > 0
+    except Exception as e:
+        log_event("ERROR", f"apply_3x_ui_panel_credentials: DB update failed: {e}")
+        return False
+
+
+def rotate_3x_ui_panel_credentials():
+    username, password = generate_panel_credentials()
+    if not apply_3x_ui_panel_credentials(username, password):
+        print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not auto-update 3x-ui credentials.")
+        return False
+    settings = load_settings()
+    settings["panel_username"] = username
+    settings["panel_password"] = password
+    save_settings(settings)
+    print(f"{Colors.GREEN}[INFO]{Colors.END} 3x-ui credentials updated after install.")
+    return True
 
 
 def print_3x_ui_panel_info(server_ip=None):
@@ -482,8 +545,11 @@ def load_settings():
     defaults = {
         "client_port": "auto",
         "client_sni": "google.com",
+        "last_foreign_link": "",
         "last_client_link": "",
         "actual_port": None,
+        "panel_username": "",
+        "panel_password": "",
     }
     return load_json(CONFIG_STORE, defaults)
 
@@ -660,6 +726,8 @@ def install_3x_ui():
         pass
 
     print(f"{Colors.CYAN}[done]{Colors.END} Verifying 3X-UI availability...")
+    if ok and is_3x_ui_present():
+        rotate_3x_ui_panel_credentials()
     log_event("INFO", f"install_3x_ui: finished with status={ok}")
     return ok
 
@@ -669,7 +737,7 @@ def ensure_3x_ui():
         return True
 
     answer = input("3X-UI is not installed. Install now? [Y/n]: ").strip().lower()
-    if answer in ("", "y", "yes", "д", "да"):
+    if answer in ("", "y", "yes", "Рґ", "РґР°"):
         if install_3x_ui():
             # Installer can return before service is fully available.
             for _ in range(3):
@@ -874,6 +942,14 @@ def setup_foreign():
     if not ensure_3x_ui():
         return False
 
+    settings = load_settings()
+    existing_foreign_link = settings.get("last_foreign_link", "").strip()
+    if existing_foreign_link:
+        print(f"\n{Colors.GREEN}Foreign server already configured.{Colors.END}")
+        print(f"{Colors.YELLOW}Current Foreign link:{Colors.END}\n{existing_foreign_link}\n")
+        print_3x_ui_panel_info()
+        return True
+
     user_uuid = str(uuid.uuid4())
     short_id = uuid.uuid4().hex[:8]
     private_key, public_key = get_xray_keys()
@@ -934,6 +1010,9 @@ def setup_foreign():
         f"&sni=google.com&fp=chrome&pbk={public_key}&sid={short_id}&type=tcp&flow=xtls-rprx-vision#Foreign"
     )
 
+    settings["last_foreign_link"] = link
+    save_settings(settings)
+
     print(f"\n{Colors.GREEN}Foreign server configured successfully!{Colors.END}")
     print(f"{Colors.YELLOW}Share this link with RU server:{Colors.END}\n{link}\n")
     print_3x_ui_panel_info(ip)
@@ -944,6 +1023,15 @@ def setup_foreign():
 def setup_ru():
     if not ensure_3x_ui():
         return False
+
+    settings = load_settings()
+    existing_client_link = settings.get("last_client_link", "").strip()
+    if existing_client_link:
+        print(f"\n{Colors.GREEN}RU bridge already configured.{Colors.END}")
+        print_qr(existing_client_link)
+        print(f"{Colors.YELLOW}Current client link:{Colors.END} {existing_client_link}")
+        print_3x_ui_panel_info()
+        return True
 
     foreign_link = input(f"\n{Colors.CYAN}Paste VLESS link from Foreign server: {Colors.END}").strip()
     try:
@@ -1060,6 +1148,39 @@ def update_client_settings():
     save_settings(settings)
     return True
 
+
+def update_panel_credentials():
+    if not ensure_3x_ui():
+        return False
+
+    current_user, _ = get_3x_ui_panel_credentials()
+    username = input(f"Panel login [{current_user}]: ").strip() or current_user
+    if not username:
+        print(f"{Colors.RED}[ERROR]{Colors.END} Login must not be empty.")
+        return False
+
+    password = input("New panel password (leave empty to auto-generate): ").strip()
+    if not password:
+        _, password = generate_panel_credentials()
+        print(f"{Colors.YELLOW}[INFO]{Colors.END} Generated new password: {password}")
+
+    if not apply_3x_ui_panel_credentials(username, password):
+        print(f"{Colors.RED}[ERROR]{Colors.END} Failed to update panel credentials.")
+        log_event("ERROR", "update_panel_credentials: apply failed")
+        return False
+
+    settings = load_settings()
+    settings["panel_username"] = username
+    settings["panel_password"] = password
+    save_settings(settings)
+
+    run(["x-ui", "restart"], "Restarting 3X-UI")
+    print(f"{Colors.GREEN}[DONE]{Colors.END} Panel credentials updated.")
+    print_3x_ui_panel_info()
+    log_event("INFO", "update_panel_credentials: updated")
+    return True
+
+
 def view_log_file():
     if not os.path.exists(LOG_PATH):
         print(f"{Colors.YELLOW}[INFO]{Colors.END} Log file not found: {LOG_PATH}")
@@ -1115,6 +1236,7 @@ def main():
         print("7. Rollback xrayConfig from backup")
         print("8. View logs")
         print("9. Exit")
+        print("10. Change 3x-ui panel login/password")
 
         choice = input("\nSelect: ").strip()
 
@@ -1137,6 +1259,8 @@ def main():
         elif choice == "9":
             log_event("INFO", "script stopped by user")
             break
+        elif choice == "10":
+            execute_menu_action("Menu 10: Change 3x-ui panel credentials", update_panel_credentials)
         else:
             print("Unknown menu option")
             log_event("WARN", f"unknown menu choice: {choice}")
