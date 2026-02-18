@@ -276,6 +276,67 @@ def get_3x_ui_panel_url(server_ip=None):
     return url
 
 
+def get_3x_ui_panel_credentials():
+    username = "admin"
+    password = "admin"
+    password_is_hashed = False
+
+    hash_pattern = re.compile(r"^\$2[aby]\$|^\$argon2|^[a-f0-9]{32,}$", re.IGNORECASE)
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            # Try settings first (some forks keep web credentials here).
+            rows = conn.execute(
+                "SELECT key, value FROM settings WHERE key IN ('webUser','webUsername','webPass','webPassword','username','password')"
+            ).fetchall()
+            settings = {k: (v or "").strip() for k, v in rows}
+            for key in ("webUser", "webUsername", "username"):
+                if settings.get(key):
+                    username = settings[key]
+                    break
+            for key in ("webPass", "webPassword", "password"):
+                if settings.get(key):
+                    password = settings[key]
+                    break
+
+            # Probe common user tables if present.
+            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            for table in ("users", "user", "admin", "admins"):
+                if table not in tables:
+                    continue
+                columns = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+                if "username" in columns:
+                    row = conn.execute(f"SELECT username FROM {table} ORDER BY rowid DESC LIMIT 1").fetchone()
+                    if row and row[0]:
+                        username = str(row[0]).strip() or username
+                if "password" in columns:
+                    row = conn.execute(f"SELECT password FROM {table} ORDER BY rowid DESC LIMIT 1").fetchone()
+                    if row and row[0]:
+                        db_password = str(row[0]).strip()
+                        if db_password:
+                            if hash_pattern.match(db_password):
+                                password_is_hashed = True
+                            else:
+                                password = db_password
+    except Exception:
+        pass
+
+    if password_is_hashed:
+        # Keep a practical fallback for fresh installs where password remains default.
+        return username, f"{password} (DB stores hash)"
+    return username, password
+
+
+def print_3x_ui_panel_info(server_ip=None):
+    panel_url = get_3x_ui_panel_url(server_ip)
+    if not panel_url:
+        return
+    username, password = get_3x_ui_panel_credentials()
+    print(f"{Colors.CYAN}3x-ui panel:{Colors.END} {panel_url}")
+    print(f"{Colors.CYAN}3x-ui login:{Colors.END} {username}")
+    print(f"{Colors.CYAN}3x-ui password:{Colors.END} {password}")
+
+
 def get_xray_keys():
     xray_bin = find_xray_binary()
     if not xray_bin:
@@ -875,9 +936,8 @@ def setup_foreign():
 
     print(f"\n{Colors.GREEN}Foreign server configured successfully!{Colors.END}")
     print(f"{Colors.YELLOW}Share this link with RU server:{Colors.END}\n{link}\n")
-    panel_url = get_3x_ui_panel_url(ip)
-    if panel_url:
-        print(f"{Colors.CYAN}3x-ui panel:{Colors.END} {panel_url}\n")
+    print_3x_ui_panel_info(ip)
+    print()
     log_event("INFO", "setup_foreign: completed")
     return True
 
@@ -919,9 +979,7 @@ def setup_ru():
         print(f"\n{Colors.GREEN}RU bridge configured successfully!{Colors.END}")
         print_qr(link)
         print(f"{Colors.YELLOW}Client link:{Colors.END} {link}")
-        panel_url = get_3x_ui_panel_url()
-        if panel_url:
-            print(f"{Colors.CYAN}3x-ui panel:{Colors.END} {panel_url}")
+        print_3x_ui_panel_info()
         log_event("INFO", "setup_ru: completed")
         return True
     except Exception as e:
@@ -976,9 +1034,7 @@ def regenerate_client_link():
         return False
     print_qr(link)
     print(f"\n{Colors.YELLOW}New client link:{Colors.END} {link}")
-    panel_url = get_3x_ui_panel_url()
-    if panel_url:
-        print(f"{Colors.CYAN}3x-ui panel:{Colors.END} {panel_url}")
+    print_3x_ui_panel_info()
     return True
 
 def update_client_settings():
