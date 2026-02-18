@@ -725,8 +725,17 @@ def build_routing(foreign, routes):
     if routes["proxy_ips"]:
         rules.append({"type": "field", "outboundTag": "proxy", "ip": routes["proxy_ips"]})
 
-    # Fallback: everything else goes through foreign proxy.
-    rules.append({"type": "field", "outboundTag": "proxy", "network": "tcp,udp"})
+    # Fallback: everything else (except direct domains) goes through foreign proxy.
+    # We need to exclude direct domains from the fallback to ensure they are routed directly.
+    if routes["direct_domains"]:
+        rules.append({
+            "type": "field",
+            "outboundTag": "proxy",
+            "network": "tcp,udp",
+            "domain": [f"!{d}" for d in routes["direct_domains"]]
+        })
+    else:
+        rules.append({"type": "field", "outboundTag": "proxy", "network": "tcp,udp"})
 
     return {
         "routing": {
