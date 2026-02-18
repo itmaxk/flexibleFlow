@@ -191,9 +191,23 @@ def fetch_text(url, timeout=15):
         return response.read().decode("utf-8", errors="replace")
 
 
+def find_xray_binary():
+    candidates = [
+        XRAY_BIN,
+        shutil.which("xray"),
+        "/usr/local/bin/xray",
+        "/usr/bin/xray",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def validate_xray_config_with_xray(config_obj):
-    if not os.path.exists(XRAY_BIN):
-        print(f"{Colors.YELLOW}[WARN]{Colors.END} Xray binary not found: {XRAY_BIN}. Skipping xray -test validation.")
+    xray_bin = find_xray_binary()
+    if not xray_bin:
+        print(f"{Colors.YELLOW}[WARN]{Colors.END} Xray binary not found. Skipping xray -test validation.")
         return True
 
     tmp_path = None
@@ -203,7 +217,7 @@ def validate_xray_config_with_xray(config_obj):
             tmp_path = tmp.name
 
         proc = subprocess.run(
-            [XRAY_BIN, "run", "-test", "-config", tmp_path],
+            [xray_bin, "run", "-test", "-config", tmp_path],
             capture_output=True,
             text=True,
         )
@@ -234,12 +248,18 @@ def get_public_ip():
 
 
 def get_xray_keys():
+    xray_bin = find_xray_binary()
+    if not xray_bin:
+        log_event("ERROR", "get_xray_keys: xray binary not found")
+        return None, None
+
     try:
-        out = subprocess.check_output([XRAY_BIN, "x25519"], text=True)
+        out = subprocess.check_output([xray_bin, "x25519"], text=True)
         priv = re.search(r"Private key: (.*)", out).group(1).strip()
         pub = re.search(r"Public key: (.*)", out).group(1).strip()
         return priv, pub
-    except Exception:
+    except Exception as e:
+        log_event("ERROR", f"get_xray_keys: failed to run x25519: {e}")
         return None, None
 
 
