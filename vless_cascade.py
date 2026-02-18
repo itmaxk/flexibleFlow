@@ -328,8 +328,8 @@ def get_3x_ui_panel_credentials():
         pass
 
     if password_is_hashed:
-        # Keep a practical fallback for fresh installs where password remains default.
-        return username, f"{password} (DB stores hash)"
+        # Hash means we cannot recover plaintext password from DB.
+        return username, "(unknown; set via menu 10)"
     return username, password
 
 
@@ -342,45 +342,30 @@ def generate_panel_credentials():
 
 def apply_3x_ui_panel_credentials(username, password):
     xui_cmd = shutil.which("x-ui")
-    if xui_cmd:
-        proc = subprocess.run(
-            [xui_cmd, "setting", "-username", username, "-password", password],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode == 0:
-            return True
-        log_event("WARN", f"apply_3x_ui_panel_credentials: x-ui setting failed: {(proc.stderr or proc.stdout or '').strip()}")
-
-    # Fallback for DB-based installations where CLI setting is unavailable.
-    try:
-        with sqlite3.connect(DB_PATH) as conn:
-            tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
-            changed = 0
-            for table in ("users", "user", "admin", "admins"):
-                if table not in tables:
-                    continue
-                columns = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
-                if "username" in columns:
-                    conn.execute(f"UPDATE {table} SET username = ?", (username,))
-                    changed += 1
-                if "password" in columns:
-                    conn.execute(f"UPDATE {table} SET password = ?", (password,))
-                    changed += 1
-            conn.execute("UPDATE settings SET value = ? WHERE key IN ('webUser','webUsername','username')", (username,))
-            conn.execute("UPDATE settings SET value = ? WHERE key IN ('webPass','webPassword','password')", (password,))
-            conn.commit()
-            return changed > 0
-    except Exception as e:
-        log_event("ERROR", f"apply_3x_ui_panel_credentials: DB update failed: {e}")
+    if not xui_cmd:
+        log_event("ERROR", "apply_3x_ui_panel_credentials: x-ui command not found")
         return False
+
+    proc = subprocess.run(
+        [xui_cmd, "setting", "-username", username, "-password", password],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    if proc.returncode != 0:
+        log_event("ERROR", f"apply_3x_ui_panel_credentials: x-ui setting failed: {output}")
+        return False
+    if "flag provided but not defined" in output.lower() or "unknown" in output.lower():
+        log_event("ERROR", f"apply_3x_ui_panel_credentials: unsupported x-ui setting syntax: {output}")
+        return False
+    return True
 
 
 def rotate_3x_ui_panel_credentials():
     username, password = generate_panel_credentials()
     if not apply_3x_ui_panel_credentials(username, password):
-        print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not auto-update 3x-ui credentials.")
+        print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not auto-update 3x-ui credentials. Use menu 10 to set them manually.")
         return False
     settings = load_settings()
     settings["panel_username"] = username
