@@ -206,6 +206,18 @@ def find_xray_binary():
     return None
 
 
+def find_xui_binary():
+    candidates = [
+        shutil.which("x-ui"),
+        "/usr/local/x-ui/x-ui",
+        "/usr/bin/x-ui",
+    ]
+    for candidate in candidates:
+        if candidate and os.path.exists(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
 def validate_xray_config_with_xray(config_obj):
     xray_bin = find_xray_binary()
     if not xray_bin:
@@ -341,25 +353,64 @@ def generate_panel_credentials():
 
 
 def apply_3x_ui_panel_credentials(username, password):
-    xui_cmd = shutil.which("x-ui")
+    xui_cmd = find_xui_binary()
     if not xui_cmd:
         log_event("ERROR", "apply_3x_ui_panel_credentials: x-ui command not found")
         return False
 
-    proc = subprocess.run(
-        [xui_cmd, "setting", "-username", username, "-password", password],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
-    if proc.returncode != 0:
-        log_event("ERROR", f"apply_3x_ui_panel_credentials: x-ui setting failed: {output}")
+    def db_has_username(expected):
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+                for table in ("users", "user", "admin", "admins"):
+                    if table not in tables:
+                        continue
+                    columns = [r[1] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+                    if "username" not in columns:
+                        continue
+                    row = conn.execute(f"SELECT username FROM {table} ORDER BY rowid DESC LIMIT 1").fetchone()
+                    if row and str(row[0]).strip() == expected:
+                        return True
+        except Exception:
+            return False
         return False
-    if "flag provided but not defined" in output.lower() or "unknown" in output.lower():
-        log_event("ERROR", f"apply_3x_ui_panel_credentials: unsupported x-ui setting syntax: {output}")
-        return False
-    return True
+
+    attempts = [
+        {
+            "cmd": [xui_cmd, "setting", "-username", username, "-password", password],
+            "input": None,
+            "label": "flags",
+        },
+        {
+            "cmd": [xui_cmd, "setting"],
+            "input": f"{username}\n{password}\n",
+            "label": "interactive",
+        },
+    ]
+
+    for attempt in attempts:
+        proc = subprocess.run(
+            attempt["cmd"],
+            input=attempt["input"],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        if proc.returncode != 0:
+            log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} failed: {output}")
+            continue
+        if "flag provided but not defined" in output.lower() or "unknown" in output.lower():
+            log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} unsupported syntax: {output}")
+            continue
+        if db_has_username(username):
+            return True
+        # If DB validation is unavailable, still accept successful process.
+        if "error" not in output.lower():
+            return True
+
+    log_event("ERROR", "apply_3x_ui_panel_credentials: all update methods failed")
+    return False
 
 
 def rotate_3x_ui_panel_credentials():
