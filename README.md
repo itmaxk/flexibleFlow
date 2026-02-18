@@ -41,6 +41,13 @@ cd flexibleFlow
 sudo python3 vless_cascade.py
 ```
 
+## Повторный старт
+
+```bash
+git pull
+sudo python3 vless_cascade.py
+```
+
 Safe mode (без автоустановки зависимостей):
 
 ```bash

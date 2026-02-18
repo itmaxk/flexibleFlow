@@ -247,6 +247,35 @@ def get_public_ip():
     return None
 
 
+def get_3x_ui_panel_url(server_ip=None):
+    ip = server_ip or get_public_ip()
+    if not ip:
+        return None
+
+    port = "54321"
+    base_path = ""
+    use_https = False
+
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            rows = conn.execute(
+                "SELECT key, value FROM settings WHERE key IN ('webPort','webBasePath','webCertFile','webKeyFile')"
+            ).fetchall()
+            settings = {k: (v or "").strip() for k, v in rows}
+            if settings.get("webPort", "").isdigit():
+                port = settings["webPort"]
+            base_path = settings.get("webBasePath", "").strip().strip("/")
+            use_https = bool(settings.get("webCertFile")) and bool(settings.get("webKeyFile"))
+    except Exception:
+        pass
+
+    scheme = "https" if use_https else "http"
+    url = f"{scheme}://{ip}:{port}"
+    if base_path:
+        url = f"{url}/{base_path}"
+    return url
+
+
 def get_xray_keys():
     xray_bin = find_xray_binary()
     if not xray_bin:
@@ -846,6 +875,9 @@ def setup_foreign():
 
     print(f"\n{Colors.GREEN}Foreign server configured successfully!{Colors.END}")
     print(f"{Colors.YELLOW}Share this link with RU server:{Colors.END}\n{link}\n")
+    panel_url = get_3x_ui_panel_url(ip)
+    if panel_url:
+        print(f"{Colors.CYAN}3x-ui panel:{Colors.END} {panel_url}\n")
     log_event("INFO", "setup_foreign: completed")
     return True
 
@@ -887,6 +919,9 @@ def setup_ru():
         print(f"\n{Colors.GREEN}RU bridge configured successfully!{Colors.END}")
         print_qr(link)
         print(f"{Colors.YELLOW}Client link:{Colors.END} {link}")
+        panel_url = get_3x_ui_panel_url()
+        if panel_url:
+            print(f"{Colors.CYAN}3x-ui panel:{Colors.END} {panel_url}")
         log_event("INFO", "setup_ru: completed")
         return True
     except Exception as e:
@@ -941,6 +976,9 @@ def regenerate_client_link():
         return False
     print_qr(link)
     print(f"\n{Colors.YELLOW}New client link:{Colors.END} {link}")
+    panel_url = get_3x_ui_panel_url()
+    if panel_url:
+        print(f"{Colors.CYAN}3x-ui panel:{Colors.END} {panel_url}")
     return True
 
 def update_client_settings():
