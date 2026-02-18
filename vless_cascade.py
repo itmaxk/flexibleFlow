@@ -1551,6 +1551,25 @@ def restart_xray_service():
     settings = load_settings()
     traffic_logging_enabled = settings.get("traffic_logging_enabled", False)
     
+    # Create traffic log file if it doesn't exist and logging is enabled
+    if traffic_logging_enabled and not os.path.exists(TRAFFIC_LOG_PATH):
+        try:
+            log_dir = os.path.dirname(TRAFFIC_LOG_PATH)
+            if log_dir and not os.path.exists(log_dir):
+                os.makedirs(log_dir, exist_ok=True)
+            # Create empty log file with proper permissions
+            with open(TRAFFIC_LOG_PATH, "a", encoding="utf-8") as f:
+                pass
+            try:
+                os.chmod(TRAFFIC_LOG_PATH, 0o644)
+            except OSError:
+                pass
+            log_event("INFO", f"restart_xray_service: created traffic log file {TRAFFIC_LOG_PATH}")
+            print(f"{Colors.CYAN}[INFO]{Colors.END} Created traffic log file: {TRAFFIC_LOG_PATH}")
+        except Exception as e:
+            log_event("ERROR", f"restart_xray_service: failed to create traffic log file: {e}")
+            print(f"{Colors.YELLOW}[WARN]{Colors.END} Failed to create traffic log file: {e}")
+    
     # Try to update xrayConfig with current traffic logging setting
     try:
         with sqlite3.connect(DB_PATH) as conn:
