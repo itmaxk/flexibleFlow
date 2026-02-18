@@ -4,11 +4,13 @@ import json
 import os
 import re
 import shlex
+import shutil
 import socket
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import urllib.parse
 import urllib.request
@@ -470,8 +472,17 @@ def build_routing(foreign, routes):
 
 
 def is_3x_ui_present():
-    return os.path.exists(DB_PATH) and os.path.exists(XRAY_BIN)
-
+    xui_cmd = shutil.which("x-ui")
+    xray_cmd = shutil.which("xray")
+    has_db = os.path.exists(DB_PATH)
+    has_xray = os.path.exists(XRAY_BIN) or (xray_cmd is not None)
+    has_unit = subprocess.run(
+        ["systemctl", "cat", "x-ui"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    ).returncode == 0
+    return (xui_cmd is not None) and (has_db or has_xray or has_unit)
 
 def install_3x_ui():
     print(f"{Colors.CYAN}[1/3]{Colors.END} Downloading 3X-UI installer...")
@@ -531,8 +542,16 @@ def ensure_3x_ui():
 
     answer = input("3X-UI is not installed. Install now? [Y/n]: ").strip().lower()
     if answer in ("", "y", "yes", "д", "да"):
-        if install_3x_ui() and is_3x_ui_present():
-            return True
+        if install_3x_ui():
+            # Installer can return before service is fully available.
+            for _ in range(3):
+                if is_3x_ui_present():
+                    return True
+                time.sleep(1)
+            run(["systemctl", "daemon-reload"], "Reloading systemd units")
+            run(["systemctl", "enable", "--now", "x-ui"], "Starting x-ui service", stream=True)
+            if is_3x_ui_present():
+                return True
         print(f"{Colors.RED}[ERROR]{Colors.END} 3X-UI is not installed or installation failed.")
         log_event("ERROR", "ensure_3x_ui: installation failed")
         return False
