@@ -177,6 +177,25 @@ def find_free_port():
         return s.getsockname()[1]
 
 
+def can_bind_port(port):
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind(("0.0.0.0", port))
+        return True
+    except OSError:
+        return False
+
+
+def choose_foreign_inbound_port():
+    preferred = [443, 8443, 2053, 2083, 2087, 2096]
+    for port in preferred:
+        if can_bind_port(port):
+            return port
+    # Last resort: random free high port.
+    return find_free_port()
+
+
 def valid_hostname(value):
     if not value or len(value) > 253:
         return False
@@ -1040,6 +1059,11 @@ def setup_foreign():
         "clients": [{"id": user_uuid, "flow": "xtls-rprx-vision"}],
         "decryption": "none",
     }
+    inbound_port = choose_foreign_inbound_port()
+    if inbound_port != 443:
+        print(f"{Colors.YELLOW}[WARN]{Colors.END} Port 443 is busy. Using {inbound_port} for Foreign inbound.")
+        log_event("WARN", f"setup_foreign: 443 busy, selected inbound port {inbound_port}")
+
     stream_settings = {
         "network": "tcp",
         "security": "reality",
@@ -1053,18 +1077,18 @@ def setup_foreign():
 
     try:
         with sqlite3.connect(DB_PATH) as conn:
-            conn.execute("DELETE FROM inbounds WHERE port=443")
+            conn.execute("DELETE FROM inbounds WHERE remark='Cascade-Exit'")
             conn.execute(
                 "INSERT INTO inbounds (enable, remark, port, protocol, settings, stream_settings, sniffing, tag) VALUES (?,?,?,?,?,?,?,?)",
                 (
                     1,
                     "Cascade-Exit",
-                    443,
+                    inbound_port,
                     "vless",
                     json.dumps(inbound_settings),
                     json.dumps(stream_settings),
                     json.dumps({"enabled": True}),
-                    "exit-443",
+                    f"exit-{inbound_port}",
                 ),
             )
             conn.commit()
@@ -1083,7 +1107,7 @@ def setup_foreign():
         return False
 
     link = (
-        f"vless://{user_uuid}@{ip}:443?encryption=none&security=reality"
+        f"vless://{user_uuid}@{ip}:{inbound_port}?encryption=none&security=reality"
         f"&sni=google.com&fp=chrome&pbk={public_key}&sid={short_id}&type=tcp&flow=xtls-rprx-vision#Foreign"
     )
 
