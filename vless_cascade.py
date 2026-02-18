@@ -569,7 +569,8 @@ def validate_route_item(value):
     value = value.strip()
     if not value or len(value) > 255:
         return False
-    return re.match(r"^[A-Za-z0-9:._*/-]+$", value) is not None
+    # Allow regex metacharacters used in Xray routing rules: ( ) [ ] { } ^ $ . | ? * + - : / _
+    return re.match(r"^[A-Za-z0-9:._*/\[\]{}()?^$|+\\-]+$", value) is not None
 
 
 def validate_routes(cfg):
