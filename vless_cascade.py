@@ -1320,6 +1320,94 @@ def view_log_file():
         log_event("ERROR", f"view_log_file: read failed: {e}")
         return False
 
+
+def reset_cascade_state():
+    print(f"{Colors.YELLOW}[WARN]{Colors.END} FULL RESET will remove all configuration and installed components from this script.")
+    print("- remove inbounds and xrayConfig changes from x-ui DB (if present)")
+    print("- uninstall 3x-ui (best effort)")
+    print("- stop/disable x-ui and xray services")
+    print("- remove files: /etc/x-ui, /usr/local/x-ui, routes/settings/logs")
+    print(f"- keep backups: {BACKUP_DIR}")
+    print("- remove Python deps installed by script: qrcode, pillow")
+    print("- remove apt dependency installed by script: python3-pip")
+    confirm = input("Type RESET ALL to continue: ").strip()
+    if confirm != "RESET ALL":
+        print("Full reset cancelled.")
+        return False
+
+    deleted_inbounds = 0
+    uninstalled_3xui = False
+
+    if os.path.exists(DB_PATH):
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                cur = conn.execute("DELETE FROM inbounds WHERE remark IN ('Cascade-Exit','User-Access')")
+                deleted_inbounds = cur.rowcount if cur.rowcount is not None else 0
+                conn.execute("DELETE FROM settings WHERE key = 'xrayConfig'")
+                conn.commit()
+        except Exception as e:
+            log_event("ERROR", f"reset_cascade_state: DB cleanup failed: {e}", with_traceback=True)
+
+    # Stop services before uninstall/removal.
+    run(["systemctl", "stop", "x-ui"], "Stopping x-ui service", stream=True)
+    run(["systemctl", "disable", "x-ui"], "Disabling x-ui service", stream=True)
+    run(["systemctl", "stop", "xray"], "Stopping xray service", stream=True)
+    run(["systemctl", "disable", "xray"], "Disabling xray service", stream=True)
+
+    # Best-effort official uninstall commands.
+    for xui_bin in find_xui_binaries():
+        for cmd in ([xui_bin, "uninstall"], [xui_bin, "remove"], [xui_bin, "del"]):
+            proc = subprocess.run(cmd, input="y\n", check=False, capture_output=True, text=True)
+            output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+            log_event("INFO", f"reset_cascade_state: try {' '.join(cmd)} rc={proc.returncode} output={output[:300]}")
+            if proc.returncode == 0:
+                uninstalled_3xui = True
+                break
+        if uninstalled_3xui:
+            break
+
+    # Remove known files/directories.
+    for path in (
+        "/etc/x-ui",
+        "/usr/local/x-ui",
+        "/etc/vless-cascade/routes.json",
+    ):
+        try:
+            if os.path.isdir(path):
+                shutil.rmtree(path, ignore_errors=True)
+            elif os.path.isfile(path):
+                os.remove(path)
+        except Exception as e:
+            log_event("WARN", f"reset_cascade_state: failed to remove dir {path}: {e}")
+
+    for path in (
+        CONFIG_STORE,
+        DB_PATH,
+        LOG_PATH,
+        "/usr/bin/x-ui",
+        "/usr/local/bin/x-ui",
+        "/etc/systemd/system/x-ui.service",
+    ):
+        try:
+            if os.path.exists(path):
+                os.remove(path)
+        except Exception as e:
+            log_event("WARN", f"reset_cascade_state: failed to remove file {path}: {e}")
+
+    run(["systemctl", "daemon-reload"], "Reloading systemd units", stream=True)
+
+    # Remove dependencies installed by this script (best effort).
+    run([sys.executable, "-m", "pip", "uninstall", "-y", "qrcode", "pillow"], "Removing Python deps (qrcode/pillow)", stream=True)
+    run(["apt-get", "remove", "-y", "python3-pip"], "Removing python3-pip", stream=True)
+    run(["apt-get", "autoremove", "-y"], "Autoremove unused packages", stream=True)
+
+    print(f"{Colors.GREEN}[DONE]{Colors.END} Full reset complete.")
+    print(f"Removed inbounds from DB: {deleted_inbounds}")
+    print(f"3x-ui uninstall command succeeded: {'yes' if uninstalled_3xui else 'no (manual cleanup applied)'}")
+    log_event("INFO", f"reset_cascade_state: full reset done deleted_inbounds={deleted_inbounds} uninstall_ok={uninstalled_3xui}")
+    return True
+
+
 def main():
     if os.getuid() != 0:
         sys.exit("Run with sudo")
@@ -1350,6 +1438,7 @@ def main():
         print("8. View logs")
         print("9. Exit")
         print("10. Change 3x-ui panel login/password")
+        print("11. Full reset (menu 1/2 changes)")
 
         choice = input("\nSelect: ").strip()
 
@@ -1374,6 +1463,8 @@ def main():
             break
         elif choice == "10":
             execute_menu_action("Menu 10: Change 3x-ui panel credentials", update_panel_credentials)
+        elif choice == "11":
+            execute_menu_action("Menu 11: Full reset of menu 1/2 state", reset_cascade_state)
         else:
             print("Unknown menu option")
             log_event("WARN", f"unknown menu choice: {choice}")
