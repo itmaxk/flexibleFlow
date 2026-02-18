@@ -352,11 +352,21 @@ def generate_panel_credentials():
     return username, password
 
 
+def redact_secret(text, secret):
+    if not text:
+        return ""
+    redacted = text
+    if secret:
+        redacted = redacted.replace(secret, "***")
+    return redacted
+
+
 def apply_3x_ui_panel_credentials(username, password):
     xui_cmd = find_xui_binary()
     if not xui_cmd:
         log_event("ERROR", "apply_3x_ui_panel_credentials: x-ui command not found")
         return False
+    log_event("INFO", f"apply_3x_ui_panel_credentials: start username={username} xui={xui_cmd}")
 
     def db_has_username(expected):
         try:
@@ -370,8 +380,10 @@ def apply_3x_ui_panel_credentials(username, password):
                         continue
                     row = conn.execute(f"SELECT username FROM {table} ORDER BY rowid DESC LIMIT 1").fetchone()
                     if row and str(row[0]).strip() == expected:
+                        log_event("INFO", f"apply_3x_ui_panel_credentials: DB username verified in table={table}")
                         return True
         except Exception:
+            log_event("WARN", "apply_3x_ui_panel_credentials: DB username verification failed")
             return False
         return False
 
@@ -389,6 +401,7 @@ def apply_3x_ui_panel_credentials(username, password):
     ]
 
     for attempt in attempts:
+        safe_cmd = " ".join(shlex.quote(part) for part in attempt["cmd"])
         proc = subprocess.run(
             attempt["cmd"],
             input=attempt["input"],
@@ -397,6 +410,11 @@ def apply_3x_ui_panel_credentials(username, password):
             text=True,
         )
         output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        output = redact_secret(output, password)
+        log_event(
+            "INFO",
+            f"apply_3x_ui_panel_credentials: method={attempt['label']} rc={proc.returncode} cmd={safe_cmd} output={output[:500]}",
+        )
         if proc.returncode != 0:
             log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} failed: {output}")
             continue
@@ -404,9 +422,11 @@ def apply_3x_ui_panel_credentials(username, password):
             log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} unsupported syntax: {output}")
             continue
         if db_has_username(username):
+            log_event("INFO", f"apply_3x_ui_panel_credentials: success via {attempt['label']} with DB verification")
             return True
         # If DB validation is unavailable, still accept successful process.
         if "error" not in output.lower():
+            log_event("INFO", f"apply_3x_ui_panel_credentials: success via {attempt['label']} without DB verification")
             return True
 
     log_event("ERROR", "apply_3x_ui_panel_credentials: all update methods failed")
@@ -1199,6 +1219,7 @@ def update_panel_credentials():
     if not password:
         _, password = generate_panel_credentials()
         print(f"{Colors.YELLOW}[INFO]{Colors.END} Generated new password: {password}")
+    log_event("INFO", f"update_panel_credentials: requested username={username} password_len={len(password)}")
 
     if not apply_3x_ui_panel_credentials(username, password):
         print(f"{Colors.RED}[ERROR]{Colors.END} Failed to update panel credentials.")
@@ -1210,7 +1231,8 @@ def update_panel_credentials():
     settings["panel_password"] = password
     save_settings(settings)
 
-    run(["x-ui", "restart"], "Restarting 3X-UI")
+    restarted = run(["x-ui", "restart"], "Restarting 3X-UI")
+    log_event("INFO", f"update_panel_credentials: x-ui restart status={restarted}")
     print(f"{Colors.GREEN}[DONE]{Colors.END} Panel credentials updated.")
     print_3x_ui_panel_info()
     log_event("INFO", "update_panel_credentials: updated")
