@@ -1423,14 +1423,18 @@ def view_log_file():
 def view_traffic_log():
     """View and analyze Xray traffic access log to understand routing decisions."""
     settings = load_settings()
-    if not settings.get("traffic_logging_enabled", False):
+    traffic_logging_enabled = settings.get("traffic_logging_enabled", False)
+    
+    if not traffic_logging_enabled:
         print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging is currently DISABLED.")
-        print(f"{Colors.YELLOW}[INFO]{Colors.END} Enable it via menu 13 to start logging traffic.")
+        print(f"{Colors.YELLOW}[INFO]{Colors.END} Enable it via menu 10 to start logging traffic.")
         return True
 
     if not os.path.exists(TRAFFIC_LOG_PATH):
         print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic log file not found: {TRAFFIC_LOG_PATH}")
-        print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be enabled after next Xray restart.")
+        print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging is enabled but no log file exists yet.")
+        print(f"{Colors.YELLOW}[INFO]{Colors.END} This may happen if Xray was just restarted or no traffic has been logged.")
+        print(f"{Colors.YELLOW}[INFO]{Colors.END} Wait for some traffic to be generated and try again.")
         return True
 
     tail_raw = input("How many last traffic log lines to show? [100]: ").strip()
