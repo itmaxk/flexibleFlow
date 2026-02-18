@@ -255,8 +255,26 @@ def get_xray_keys():
 
     try:
         out = subprocess.check_output([xray_bin, "x25519"], text=True)
-        priv = re.search(r"Private key: (.*)", out).group(1).strip()
-        pub = re.search(r"Public key: (.*)", out).group(1).strip()
+        # Handle output differences across xray versions/builds.
+        priv_match = re.search(r"(?im)^\s*Private key:\s*(\S+)\s*$", out)
+        pub_match = re.search(r"(?im)^\s*Public key:\s*(\S+)\s*$", out)
+
+        if not priv_match:
+            priv_match = re.search(r"(?im)^\s*privateKey:\s*(\S+)\s*$", out)
+        if not pub_match:
+            pub_match = re.search(r"(?im)^\s*publicKey:\s*(\S+)\s*$", out)
+
+        if not priv_match or not pub_match:
+            # Last-resort parser: pick first two base64url-looking tokens.
+            tokens = re.findall(r"[A-Za-z0-9_-]{32,}", out)
+            if len(tokens) >= 2:
+                priv, pub = tokens[0], tokens[1]
+            else:
+                log_event("ERROR", f"get_xray_keys: unrecognized x25519 output: {out!r}")
+                return None, None
+        else:
+            priv = priv_match.group(1).strip()
+            pub = pub_match.group(1).strip()
         return priv, pub
     except Exception as e:
         log_event("ERROR", f"get_xray_keys: failed to run x25519: {e}")
