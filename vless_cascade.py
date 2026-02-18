@@ -1518,11 +1518,19 @@ def toggle_traffic_logging():
         print(f"{Colors.GREEN}[INFO]{Colors.END} Traffic logging is now {status_text}")
         log_event("INFO", f"toggle_traffic_logging: traffic_logging_enabled={new_status}")
         
-        if new_status:
-            print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be enabled after restarting Xray (Menu 11).")
-            print(f"{Colors.YELLOW}[INFO]{Colors.END} View traffic logs via Menu 9.")
+        # Automatically restart Xray to apply the change
+        if not is_3x_ui_present():
+            print(f"{Colors.YELLOW}[WARN]{Colors.END} 3X-UI is not installed. Restart Xray manually to apply changes.")
+            return True
+        
+        print(f"{Colors.CYAN}[INFO]{Colors.END} Restarting Xray service to apply changes...")
+        if restart_xray_service():
+            if new_status:
+                print(f"{Colors.GREEN}[DONE]{Colors.END} Traffic logging is now active. View logs via Menu 9.")
+            else:
+                print(f"{Colors.GREEN}[DONE]{Colors.END} Traffic logging is now disabled.")
         else:
-            print(f"{Colors.YELLOW}[INFO]{Colors.END} Traffic logging will be disabled after restarting Xray (Menu 11).")
+            print(f"{Colors.YELLOW}[WARN]{Colors.END} Failed to restart Xray. Restart manually via Menu 11.")
         
         return True
     else:
