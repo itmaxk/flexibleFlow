@@ -1536,7 +1536,46 @@ def restart_xray_service():
         print(f"{Colors.RED}[ERROR]{Colors.END} 3X-UI is not installed or not running.")
         return False
     
-    print(f"{Colors.CYAN}[INFO]{Colors.END} Restarting Xray/3x-ui service to apply configuration changes...")
+    settings = load_settings()
+    traffic_logging_enabled = settings.get("traffic_logging_enabled", False)
+    
+    # Try to update xrayConfig with current traffic logging setting
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cur = conn.execute("SELECT value FROM settings WHERE key = 'xrayConfig' LIMIT 1")
+            row = cur.fetchone()
+            if row and row[0]:
+                try:
+                    xray_config = json.loads(row[0])
+                    # Update log configuration based on current setting
+                    if traffic_logging_enabled:
+                        xray_config["log"] = {
+                            "access": TRAFFIC_LOG_PATH,
+                            "error": "/var/log/xray-error.log",
+                            "loglevel": "warning"
+                        }
+                    elif "log" in xray_config:
+                        # Remove log configuration if traffic logging is disabled
+                        del xray_config["log"]
+                    
+                    # Save updated config
+                    conn.execute(
+                        "UPDATE settings SET value = ? WHERE key = 'xrayConfig'",
+                        (json.dumps(xray_config),),
+                    )
+                    conn.commit()
+                    log_event("INFO", f"restart_xray_service: updated xrayConfig with traffic_logging={traffic_logging_enabled}")
+                    print(f"{Colors.CYAN}[INFO]{Colors.END} Updated Xray configuration (traffic logging: {Colors.GREEN if traffic_logging_enabled else Colors.RED}{'enabled' if traffic_logging_enabled else 'disabled'}{Colors.END})")
+                except json.JSONDecodeError as e:
+                    log_event("ERROR", f"restart_xray_service: failed to parse xrayConfig: {e}")
+                    print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not update Xray configuration, will just restart service.")
+            else:
+                print(f"{Colors.YELLOW}[INFO]{Colors.END} No xrayConfig found in database, will just restart service.")
+    except Exception as e:
+        log_event("ERROR", f"restart_xray_service: failed to update xrayConfig: {e}")
+        print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not update Xray configuration, will just restart service.")
+    
+    print(f"{Colors.CYAN}[INFO]{Colors.END} Restarting Xray/3x-ui service...")
     
     if run(["x-ui", "restart"], "Restarting 3X-UI"):
         print(f"{Colors.GREEN}[DONE]{Colors.END} Xray/3x-ui service restarted successfully.")
