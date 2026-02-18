@@ -833,7 +833,7 @@ def ensure_3x_ui():
         return True
 
     answer = input("3X-UI is not installed. Install now? [Y/n]: ").strip().lower()
-    if answer in ("", "y", "yes", "Рґ", "РґР°"):
+    if answer in ("", "y", "yes", "Р Т‘", "Р Т‘Р В°"):
         if install_3x_ui():
             # Installer can return before service is fully available.
             for _ in range(3):
@@ -962,6 +962,11 @@ def create_client_inbound():
             port = int(settings["client_port"])
             if port < 1 or port > 65535:
                 raise ValueError("Client port must be in range 1..65535")
+            if not can_bind_port(port):
+                print(f"{Colors.YELLOW}[WARN]{Colors.END} Configured client port {port} is busy. Falling back to auto port.")
+                log_event("WARN", f"create_client_inbound: configured port {port} busy, fallback to auto")
+                port = find_free_port()
+                settings["actual_port"] = port
     except Exception:
         print(f"{Colors.RED}[ERROR]{Colors.END} Invalid client_port value in settings. Use integer 1..65535 or auto.")
         return None
@@ -1044,6 +1049,7 @@ def setup_foreign():
         print(f"\n{Colors.GREEN}Foreign server already configured.{Colors.END}")
         print(f"{Colors.YELLOW}Current Foreign link:{Colors.END}\n{existing_foreign_link}\n")
         print_3x_ui_panel_info()
+        log_event("INFO", "setup_foreign: already configured, returned existing link")
         return True
 
     user_uuid = str(uuid.uuid4())
@@ -1132,6 +1138,7 @@ def setup_ru():
         print_qr(existing_client_link)
         print(f"{Colors.YELLOW}Current client link:{Colors.END} {existing_client_link}")
         print_3x_ui_panel_info()
+        log_event("INFO", "setup_ru: already configured, returned existing link")
         return True
 
     foreign_link = input(f"\n{Colors.CYAN}Paste VLESS link from Foreign server: {Colors.END}").strip()
