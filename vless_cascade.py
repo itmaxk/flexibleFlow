@@ -206,16 +206,18 @@ def find_xray_binary():
     return None
 
 
-def find_xui_binary():
+def find_xui_binaries():
     candidates = [
-        shutil.which("x-ui"),
         "/usr/local/x-ui/x-ui",
+        shutil.which("x-ui"),
         "/usr/bin/x-ui",
     ]
+    result = []
     for candidate in candidates:
         if candidate and os.path.exists(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
+            if candidate not in result:
+                result.append(candidate)
+    return result
 
 
 def validate_xray_config_with_xray(config_obj):
@@ -364,11 +366,11 @@ def redact_secret(text, secret):
 
 
 def apply_3x_ui_panel_credentials(username, password):
-    xui_cmd = find_xui_binary()
-    if not xui_cmd:
+    xui_bins = find_xui_binaries()
+    if not xui_bins:
         log_event("ERROR", "apply_3x_ui_panel_credentials: x-ui command not found")
         return False
-    log_event("INFO", f"apply_3x_ui_panel_credentials: start username={username} xui={xui_cmd}")
+    log_event("INFO", f"apply_3x_ui_panel_credentials: start username={username} xui_bins={xui_bins}")
 
     def db_has_username(expected):
         try:
@@ -389,56 +391,64 @@ def apply_3x_ui_panel_credentials(username, password):
             return False
         return False
 
-    attempts = [
-        {
-            "cmd": [xui_cmd, "setting", "-username", username, "-password", password],
-            "input": None,
-            "label": "flags",
-        },
-        {
-            "cmd": [xui_cmd, "setting"],
-            "input": f"{username}\n{password}\n",
-            "label": "interactive",
-        },
-    ]
+    usage_markers = (
+        "x-ui control menu usages",
+        "subcommands",
+        "admin management script",
+    )
 
-    for attempt in attempts:
-        safe_cmd = " ".join(shlex.quote(part) for part in attempt["cmd"])
-        proc = subprocess.run(
-            attempt["cmd"],
-            input=attempt["input"],
-            check=False,
-            capture_output=True,
-            text=True,
-        )
-        output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
-        output = redact_secret(output, password)
-        lower_output = output.lower()
-        usage_markers = (
-            "x-ui control menu usages",
-            "subcommands",
-            "admin management script",
-        )
-        log_event(
-            "INFO",
-            f"apply_3x_ui_panel_credentials: method={attempt['label']} rc={proc.returncode} cmd={safe_cmd} output={output[:500]}",
-        )
-        if proc.returncode != 0:
-            log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} failed: {output}")
-            continue
-        if "flag provided but not defined" in lower_output or "unknown" in lower_output:
-            log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} unsupported syntax: {output}")
-            continue
-        if any(marker in lower_output for marker in usage_markers):
-            log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} returned usage/help output")
-            continue
-        if db_has_username(username):
-            log_event("INFO", f"apply_3x_ui_panel_credentials: success via {attempt['label']} with DB verification")
-            return True
-        # If DB validation is unavailable, still accept successful process.
-        if "error" not in lower_output:
-            log_event("INFO", f"apply_3x_ui_panel_credentials: success via {attempt['label']} without DB verification")
-            return True
+    for xui_cmd in xui_bins:
+        attempts = [
+            {
+                "cmd": [xui_cmd, "setting", "-username", username, "-password", password],
+                "input": None,
+                "label": "setting-flags",
+            },
+            {
+                "cmd": [xui_cmd, "setting", "--username", username, "--password", password],
+                "input": None,
+                "label": "setting-long-flags",
+            },
+            {
+                "cmd": [xui_cmd, "settings", "-username", username, "-password", password],
+                "input": None,
+                "label": "settings-flags",
+            },
+            {
+                "cmd": [xui_cmd, "setting"],
+                "input": f"{username}\n{password}\n",
+                "label": "setting-interactive",
+            },
+        ]
+
+        for attempt in attempts:
+            safe_cmd = " ".join(shlex.quote(part) for part in attempt["cmd"])
+            proc = subprocess.run(
+                attempt["cmd"],
+                input=attempt["input"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+            output = redact_secret(output, password)
+            lower_output = output.lower()
+            log_event(
+                "INFO",
+                f"apply_3x_ui_panel_credentials: bin={xui_cmd} method={attempt['label']} rc={proc.returncode} cmd={safe_cmd} output={output[:500]}",
+            )
+            if proc.returncode != 0:
+                continue
+            if "flag provided but not defined" in lower_output or "unknown" in lower_output:
+                continue
+            if any(marker in lower_output for marker in usage_markers):
+                continue
+            if db_has_username(username):
+                log_event("INFO", f"apply_3x_ui_panel_credentials: success via {xui_cmd}::{attempt['label']} with DB verification")
+                return True
+            if "error" not in lower_output:
+                log_event("INFO", f"apply_3x_ui_panel_credentials: success via {xui_cmd}::{attempt['label']} without DB verification")
+                return True
 
     log_event("ERROR", "apply_3x_ui_panel_credentials: all update methods failed")
     return False
