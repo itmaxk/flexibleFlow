@@ -499,8 +499,13 @@ def print_3x_ui_panel_info(server_ip=None):
 def get_xray_keys():
     xray_bin = find_xray_binary()
     if not xray_bin:
-        log_event("ERROR", "get_xray_keys: xray binary not found")
-        return None, None
+        print(f"{Colors.YELLOW}[WARN]{Colors.END} Xray binary not found. Attempting to install...")
+        log_event("WARN", "get_xray_keys: xray binary not found, attempting to install")
+        if install_xray():
+            xray_bin = find_xray_binary()
+        if not xray_bin:
+            log_event("ERROR", "get_xray_keys: xray binary not found after installation attempt")
+            return None, None
 
     try:
         out = subprocess.check_output([xray_bin, "x25519"], text=True)
@@ -766,7 +771,12 @@ def is_3x_ui_present():
     xui_cmd = shutil.which("x-ui")
     xray_cmd = shutil.which("xray")
     has_db = os.path.exists(DB_PATH)
-    has_xray = os.path.exists(XRAY_BIN) or (xray_cmd is not None)
+    # Check if xray binary exists and is executable
+    has_xray = False
+    if os.path.exists(XRAY_BIN) and os.access(XRAY_BIN, os.X_OK):
+        has_xray = True
+    elif xray_cmd and os.access(xray_cmd, os.X_OK):
+        has_xray = True
     has_unit = subprocess.run(
         ["systemctl", "cat", "x-ui"],
         check=False,
@@ -827,6 +837,53 @@ def install_3x_ui():
         rotate_3x_ui_panel_credentials()
     log_event("INFO", f"install_3x_ui: finished with status={ok}")
     return ok
+
+
+def install_xray():
+    """Install Xray binary if not found."""
+    xray_bin = find_xray_binary()
+    if xray_bin:
+        print(f"{Colors.GREEN}[INFO]{Colors.END} Xray binary found at: {xray_bin}")
+        return True
+    
+    print(f"{Colors.CYAN}[1/3]{Colors.END} Downloading Xray installer...")
+    install_url = "https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
+    try:
+        script_text = fetch_text(install_url, timeout=30)
+    except Exception as e:
+        print(f"{Colors.RED}[ERROR]{Colors.END} Failed to download Xray installer: {e}")
+        log_event("ERROR", f"install_xray: download failed: {e}")
+        return False
+
+    script_path = "/tmp/xray-install.sh"
+    try:
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(script_text)
+        os.chmod(script_path, 0o700)
+    except Exception as e:
+        print(f"{Colors.RED}[ERROR]{Colors.END} Failed to write Xray installer script: {e}")
+        log_event("ERROR", f"install_xray: write script failed: {e}")
+        return False
+
+    print(f"{Colors.CYAN}[2/3]{Colors.END} Running Xray installer (this can take a few minutes)...")
+    try:
+        ok = run(["bash", script_path], "Installing Xray", stream=True)
+    finally:
+        try:
+            os.remove(script_path)
+        except OSError:
+            pass
+
+    print(f"{Colors.CYAN}[3/3]{Colors.END} Verifying Xray installation...")
+    xray_bin = find_xray_binary()
+    if ok and xray_bin:
+        print(f"{Colors.GREEN}[INFO]{Colors.END} Xray installed successfully at: {xray_bin}")
+        log_event("INFO", f"install_xray: finished successfully, binary at {xray_bin}")
+        return True
+    else:
+        print(f"{Colors.RED}[ERROR]{Colors.END} Xray installation failed or binary not found.")
+        log_event("ERROR", "install_xray: installation failed")
+        return False
 
 
 def ensure_3x_ui():
