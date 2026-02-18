@@ -349,6 +349,8 @@ def generate_panel_credentials():
     username = f"admin{secrets.randbelow(9000) + 1000}"
     alphabet = string.ascii_letters + string.digits + "-_"
     password = "".join(secrets.choice(alphabet) for _ in range(16))
+    if password.startswith("-"):
+        password = "A" + password[1:]
     return username, password
 
 
@@ -411,6 +413,12 @@ def apply_3x_ui_panel_credentials(username, password):
         )
         output = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
         output = redact_secret(output, password)
+        lower_output = output.lower()
+        usage_markers = (
+            "x-ui control menu usages",
+            "subcommands",
+            "admin management script",
+        )
         log_event(
             "INFO",
             f"apply_3x_ui_panel_credentials: method={attempt['label']} rc={proc.returncode} cmd={safe_cmd} output={output[:500]}",
@@ -418,14 +426,17 @@ def apply_3x_ui_panel_credentials(username, password):
         if proc.returncode != 0:
             log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} failed: {output}")
             continue
-        if "flag provided but not defined" in output.lower() or "unknown" in output.lower():
+        if "flag provided but not defined" in lower_output or "unknown" in lower_output:
             log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} unsupported syntax: {output}")
+            continue
+        if any(marker in lower_output for marker in usage_markers):
+            log_event("WARN", f"apply_3x_ui_panel_credentials: {attempt['label']} returned usage/help output")
             continue
         if db_has_username(username):
             log_event("INFO", f"apply_3x_ui_panel_credentials: success via {attempt['label']} with DB verification")
             return True
         # If DB validation is unavailable, still accept successful process.
-        if "error" not in output.lower():
+        if "error" not in lower_output:
             log_event("INFO", f"apply_3x_ui_panel_credentials: success via {attempt['label']} without DB verification")
             return True
 
@@ -1219,6 +1230,9 @@ def update_panel_credentials():
     if not password:
         _, password = generate_panel_credentials()
         print(f"{Colors.YELLOW}[INFO]{Colors.END} Generated new password: {password}")
+    elif password.startswith("-"):
+        print(f"{Colors.RED}[ERROR]{Colors.END} Password must not start with '-' (CLI compatibility).")
+        return False
     log_event("INFO", f"update_panel_credentials: requested username={username} password_len={len(password)}")
 
     if not apply_3x_ui_panel_credentials(username, password):
