@@ -781,7 +781,11 @@ def build_routing(foreign, routes, traffic_logging_enabled=False):
     # Only add log configuration if traffic logging is enabled
     if traffic_logging_enabled:
         config["log"] = {
-            "access": TRAFFIC_LOG_PATH,
+            "access": {
+                "type": "file",
+                "path": TRAFFIC_LOG_PATH,
+                "format": "json"
+            },
             "error": "/var/log/xray-error.log",
             "loglevel": "info"
         }
@@ -1422,6 +1426,8 @@ def view_log_file():
 
 def view_traffic_log():
     """View and analyze Xray traffic access log to understand routing decisions."""
+    import json as json_module
+    
     settings = load_settings()
     traffic_logging_enabled = settings.get("traffic_logging_enabled", False)
     
@@ -1455,7 +1461,7 @@ def view_traffic_log():
             return True
 
         print(f"\n{Colors.CYAN}=== Last {min(tail_n, len(lines))} lines from {TRAFFIC_LOG_PATH} ==={Colors.END}")
-        print(f"{Colors.CYAN}Format: timestamp [protocol] source:port -> destination:port -> outbound_tag{Colors.END}")
+        print(f"{Colors.CYAN}JSON Format: Shows connection details including routing decisions{Colors.END}")
         print(f"{Colors.GREEN}direct{Colors.END} = routed directly (no proxy)")
         print(f"{Colors.YELLOW}proxy{Colors.END} = routed through foreign proxy")
         print("-" * 80)
@@ -1465,28 +1471,33 @@ def view_traffic_log():
         proxy_count = 0
         for line in lines[-tail_n:]:
             line_stripped = line.rstrip("\n")
-            # Colorize based on outbound tag
-            if ">>>" in line_stripped:
-                if "direct" in line_stripped.lower():
-                    direct_count += 1
-                    # Highlight direct routes in green
-                    parts = line_stripped.split(">>>")
-                    if len(parts) == 2:
-                        print(f"{parts[0]}>>>{Colors.GREEN}{parts[1]}{Colors.END}")
+            if line_stripped.strip():
+                # Try to parse as JSON for detailed routing information
+                try:
+                    log_entry = json_module.loads(line_stripped)
+                    # Extract routing information from JSON log
+                    destination = log_entry.get("dest", "unknown")
+                    outbound_tag = log_entry.get("outbound", {}).get("tag", "unknown") if "outbound" in log_entry else log_entry.get("outboundTag", "unknown")
+                    
+                    if outbound_tag.lower() == "direct":
+                        direct_count += 1
+                        print(f"{Colors.GREEN}[DIRECT]{Colors.END} {line_stripped}")
+                    elif outbound_tag.lower() == "proxy":
+                        proxy_count += 1
+                        print(f"{Colors.YELLOW}[PROXY]{Colors.END} {line_stripped}")
                     else:
                         print(line_stripped)
-                elif "proxy" in line_stripped.lower() or "vless" in line_stripped.lower():
-                    proxy_count += 1
-                    # Highlight proxy routes in yellow
-                    parts = line_stripped.split(">>>")
-                    if len(parts) == 2:
-                        print(f"{parts[0]}>>>{Colors.YELLOW}{parts[1]}{Colors.END}")
+                        
+                except json_module.JSONDecodeError:
+                    # If not JSON, display as plain text
+                    if "direct" in line_stripped.lower():
+                        direct_count += 1
+                        print(f"{Colors.GREEN}[DIRECT]{Colors.END} {line_stripped}")
+                    elif "proxy" in line_stripped.lower() or "vless" in line_stripped.lower():
+                        proxy_count += 1
+                        print(f"{Colors.YELLOW}[PROXY]{Colors.END} {line_stripped}")
                     else:
                         print(line_stripped)
-                else:
-                    print(line_stripped)
-            else:
-                print(line_stripped)
         
         # Show summary
         total_shown = min(tail_n, len(lines))
@@ -1581,7 +1592,11 @@ def restart_xray_service():
                     # Update log configuration based on current setting
                     if traffic_logging_enabled:
                         xray_config["log"] = {
-                            "access": TRAFFIC_LOG_PATH,
+                            "access": {
+                                "type": "file",
+                                "path": TRAFFIC_LOG_PATH,
+                                "format": "json"
+                            },
                             "error": "/var/log/xray-error.log",
                             "loglevel": "info"
                         }
