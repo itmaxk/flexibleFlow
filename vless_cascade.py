@@ -783,7 +783,7 @@ def build_routing(foreign, routes, traffic_logging_enabled=False):
         config["log"] = {
             "access": TRAFFIC_LOG_PATH,
             "error": "/var/log/xray-error.log",
-            "loglevel": "warning"
+            "loglevel": "info"
         }
 
     return config
@@ -1583,7 +1583,7 @@ def restart_xray_service():
                         xray_config["log"] = {
                             "access": TRAFFIC_LOG_PATH,
                             "error": "/var/log/xray-error.log",
-                            "loglevel": "warning"
+                            "loglevel": "info"
                         }
                         log_event("INFO", f"restart_xray_service: added log config with path={TRAFFIC_LOG_PATH}")
                     elif "log" in xray_config:
