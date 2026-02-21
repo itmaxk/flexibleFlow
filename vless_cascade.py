@@ -719,6 +719,42 @@ def parse_foreign_link(link):
     }
 
 
+def extract_foreign_from_xray_config_db():
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            cur = conn.execute("SELECT value FROM settings WHERE key = 'xrayConfig' LIMIT 1")
+            row = cur.fetchone()
+        if not row or not row[0]:
+            return None
+        cfg = json.loads(row[0])
+        outbounds = cfg.get("outbounds", [])
+        for ob in outbounds:
+            if ob.get("protocol") != "vless":
+                continue
+            settings = ob.get("settings", {})
+            vnext = settings.get("vnext", [])
+            if not vnext:
+                continue
+            first = vnext[0]
+            users = first.get("users", [])
+            if not users:
+                continue
+            reality = ob.get("streamSettings", {}).get("realitySettings", {})
+            candidate = {
+                "address": first.get("address", ""),
+                "port": int(first.get("port", 443)),
+                "id": users[0].get("id", ""),
+                "sni": reality.get("serverName", ""),
+                "pbk": reality.get("publicKey", ""),
+                "sid": reality.get("shortId", ""),
+            }
+            if all(candidate.get(k) for k in ("address", "id", "sni", "pbk", "sid")):
+                return candidate
+    except Exception as e:
+        log_event("ERROR", f"extract_foreign_from_xray_config_db failed: {e}", with_traceback=True)
+    return None
+
+
 def get_script_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
@@ -1352,17 +1388,12 @@ def setup_ru():
                 print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not parse saved Foreign link for MikroTik: {e}")
                 log_event("ERROR", f"setup_ru: parse saved foreign link failed: {e}")
         else:
-            print(f"{Colors.YELLOW}[WARN]{Colors.END} Foreign link is not saved yet.")
-            foreign_link_for_mikrotik = input(
-                f"{Colors.CYAN}Paste Foreign VLESS link to generate MikroTik file now (or press Enter to skip): {Colors.END}"
-            ).strip()
-            if foreign_link_for_mikrotik:
-                try:
-                    sync_mikrotik_bootstrap(parse_foreign_link(foreign_link_for_mikrotik))
-                except Exception as e:
-                    print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not parse provided Foreign link: {e}")
-                    log_event("ERROR", f"setup_ru: parse provided foreign link failed: {e}")
+            foreign_from_db = extract_foreign_from_xray_config_db()
+            if foreign_from_db:
+                print(f"{Colors.CYAN}[INFO]{Colors.END} Foreign link not saved; using values from current xrayConfig.")
+                sync_mikrotik_bootstrap(foreign_from_db)
             else:
+                print(f"{Colors.YELLOW}[WARN]{Colors.END} Foreign link is not saved and xrayConfig has no proxy values.")
                 print(f"{Colors.YELLOW}[WARN]{Colors.END} MikroTik file generation skipped.")
         print_3x_ui_panel_info()
         log_event("INFO", "setup_ru: already configured, returned existing link")
