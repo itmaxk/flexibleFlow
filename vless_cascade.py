@@ -763,13 +763,14 @@ def render_mikrotik_bootstrap_content(foreign):
     for old, new in replacements.items():
         content = content.replace(old, new)
 
-    # Make sure port value is aligned with the current foreign link.
-    content = re.sub(
-        r':local VLESS_PORT \d+',
-        f':local VLESS_PORT {foreign["port"]}',
-        content,
-        count=1,
-    )
+    # Also patch explicit RouterOS variable lines, so generation works even if
+    # the template no longer contains REPLACE_* placeholders.
+    content = re.sub(r':local VLESS_SERVER "[^"]*"', f':local VLESS_SERVER "{foreign["address"]}"', content, count=1)
+    content = re.sub(r":local VLESS_PORT \d+", f':local VLESS_PORT {foreign["port"]}', content, count=1)
+    content = re.sub(r':local UUID "[^"]*"', f':local UUID "{foreign["id"]}"', content, count=1)
+    content = re.sub(r':local SNI "[^"]*"', f':local SNI "{foreign["sni"]}"', content, count=1)
+    content = re.sub(r':local PBK "[^"]*"', f':local PBK "{foreign["pbk"]}"', content, count=1)
+    content = re.sub(r':local SID "[^"]*"', f':local SID "{foreign["sid"]}"', content, count=1)
     return content
 
 
@@ -791,6 +792,12 @@ def generate_mikrotik_bootstrap_file(foreign):
     with open(target, "w", encoding="utf-8") as f:
         f.write(content)
     print(f"{Colors.GREEN}[DONE]{Colors.END} Generated MikroTik bootstrap: {target}")
+    print(
+        f"{Colors.CYAN}[INFO]{Colors.END} "
+        "Applied values: "
+        f"server={foreign['address']} port={foreign['port']} "
+        f"uuid={foreign['id']} sni={foreign['sni']}"
+    )
     log_event("INFO", f"generated MikroTik bootstrap: {target}")
     return target
 
@@ -1345,7 +1352,18 @@ def setup_ru():
                 print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not parse saved Foreign link for MikroTik: {e}")
                 log_event("ERROR", f"setup_ru: parse saved foreign link failed: {e}")
         else:
-            print(f"{Colors.YELLOW}[WARN]{Colors.END} Foreign link is not saved yet, MikroTik file not generated.")
+            print(f"{Colors.YELLOW}[WARN]{Colors.END} Foreign link is not saved yet.")
+            foreign_link_for_mikrotik = input(
+                f"{Colors.CYAN}Paste Foreign VLESS link to generate MikroTik file now (or press Enter to skip): {Colors.END}"
+            ).strip()
+            if foreign_link_for_mikrotik:
+                try:
+                    sync_mikrotik_bootstrap(parse_foreign_link(foreign_link_for_mikrotik))
+                except Exception as e:
+                    print(f"{Colors.YELLOW}[WARN]{Colors.END} Could not parse provided Foreign link: {e}")
+                    log_event("ERROR", f"setup_ru: parse provided foreign link failed: {e}")
+            else:
+                print(f"{Colors.YELLOW}[WARN]{Colors.END} MikroTik file generation skipped.")
         print_3x_ui_panel_info()
         log_event("INFO", "setup_ru: already configured, returned existing link")
         return True
