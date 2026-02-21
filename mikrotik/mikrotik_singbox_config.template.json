@@ -1,0 +1,39 @@
+{
+  "log": { "level": "warn" },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "tun-in",
+      "interface_name": "sb-tun",
+      "inet4_address": "172.29.0.1/30",
+      "mtu": 1500,
+      "auto_route": true,
+      "strict_route": false
+    }
+  ],
+  "outbounds": [
+    {
+      "type": "vless",
+      "tag": "vless-out",
+      "server": "REPLACE_SERVER",
+      "server_port": 443,
+      "uuid": "REPLACE_UUID",
+      "flow": "xtls-rprx-vision",
+      "tls": {
+        "enabled": true,
+        "server_name": "REPLACE_SNI",
+        "utls": { "enabled": true, "fingerprint": "chrome" },
+        "reality": {
+          "enabled": true,
+          "public_key": "REPLACE_REALITY_PBK",
+          "short_id": "REPLACE_REALITY_SID"
+        }
+      }
+    },
+    { "type": "direct", "tag": "direct" }
+  ],
+  "route": {
+    "auto_detect_interface": false,
+    "final": "vless-out"
+  }
+}

@@ -128,3 +128,11 @@ Fallback-правило всегда сохраняется: весь остал
 - iOS: `Streisand`, `FoXray`, `V2Box`
 - Windows: `v2rayN`, `Nekoray`, `Hiddify Next`
 - macOS: `FoXray`, `V2Box`
+
+## MikroTik
+
+Файлы для MikroTik RouterOS `7.21.3` находятся в `mikrotik/`.
+
+Основной автоматический скрипт для чистого роутера:
+
+- `mikrotik/mikrotik_bootstrap_v7213.rsc`
